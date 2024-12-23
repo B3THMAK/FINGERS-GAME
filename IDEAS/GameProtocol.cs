@@ -1,12 +1,16 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿using System.Net;
+using System.Net.Sockets;
+using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace RSP_SERVER
+public enum GameMove { Rock,Paper ,Scissors}
+public enum GameResults { Win, Lose, Draw}
+public class GameMessage
+
 {
-    internal class GameProtocol
-    {
-    }
+    public string Type { get; set; }
+    public string Content { get; set; }
+    public GameMove? PlayerMove { get; set; }  
+    public int? Score { get; set; }
 }
+
