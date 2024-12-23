@@ -27,7 +27,8 @@ public class GameServer
         {
             TcpClient client = await listener.AcceptTcpClientAsync();
             Console.WriteLine("New client connected!");
-
+            var gameTask = HandleClientAsync(client);
+            activeGames.Add(gameTask);
             activeGames.RemoveAll(t => t.IsCompleted);
         }
     }
