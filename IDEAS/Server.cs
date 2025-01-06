@@ -26,33 +26,44 @@ public class GameServer
         {
             TcpClient client = await listener.AcceptTcpClientAsync();
             Console.WriteLine("New client connected!");
-            var gameTask = HandleClientAsync(client);
-            activeGames.Add(gameTask);
-            activeGames.RemoveAll(t => t.IsCompleted);
+            HandleNewConnection(client);
         }
     }
-    private async Task HandleClientAsync(TcpClient client)
+    private async Task HandleNewConnection(TcpClient client)
     {
-        using (NetworkStream stream = client.GetStream())
-        using (var reader = new StreamReader(stream))
-        using (var writer = new StreamWriter(stream) { AutoFlush = true })
+        Task.Run(async () =>
         {
-            string playerName = await reader.ReadLineAsync();
-            Console.WriteLine($"Player {playerName} joined the game");
-
-            while (true)
+            using (NetworkStream stream = client.GetStream())
+            using (var reader = new StreamReader(stream))
+            using (var writer = new StreamWriter(stream) { AutoFlush = true })
             {
-                try
+                string playerName = await reader.ReadLineAsync();
+                Console.WriteLine($"Player {playerName} joined the game");
+                lock (leaderboardLock)
+
                 {
-                    string messageJson = await reader.ReadLineAsync();
-                    if (string.IsNullOrEmpty(messageJson)) break;
-
-                    var message = JsonSerializer.Deserialize<GameMessage>(messageJson);
-                    Console.WriteLine($"Received move from {playerName}: {message.PlayerMove}");
+                    if (!leaderboard.ContainsKey(playerName))
+                        leaderboard[playerName] = 0;
                 }
-                
 
-           }
-        }
+                // Add player to matchmaking queue
+                lock (waitingPlayers)
+                {
+                    if (waitingPlayers.Count > 0)
+                    {
+                        var opponent = waitingPlayers.Dequeue();
+                        StartMatch(client, opponent, playerName);
+                    }
+                    else
+                    {
+                        waitingPlayers.Enqueue(client);
+                        await writer.WriteLineAsync("Waiting for an opponent...");
+                    }
+                }
+            }
+        });
     }
-}
+
+
+}      
+
