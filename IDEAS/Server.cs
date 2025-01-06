@@ -8,11 +8,10 @@ using System.Threading.Tasks;
 public class GameServer
 {
     private TcpListener listener;
-    private Dictionary<string, int> topScores = new Dictionary<string, int>();
-    private List<Task> activeGames = new List<Task>();
-    private object scoreLock = new object();
-    private object playerName;
-
+    private Dictionary<string, int> leaderboard = new Dictionary<string, int>();
+    private Queue<TcpClient> waitingPlayers = new Queue<TcpClient>();
+    private object leaderboardLock = new object();
+    private int roundTime = 15; // Time limit for each round in seconds
     public GameServer(int port = 5000)
     {
         listener = new TcpListener(IPAddress.Any, port);
