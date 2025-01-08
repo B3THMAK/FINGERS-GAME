@@ -152,5 +152,26 @@ public class GameServer
 
         return null;
     }
+    private (string player1Message, int player1Score, string player2Message, int player2Score) DetermineResults(GameMove move1, GameMove move2)
+    {
+        if (move1 == move2) return ("It's a draw!", 0, "It's a draw!", 0);
+
+        var result = (move1, move2) switch
+        {
+            (GameMove.Rock, GameMove.Scissors) => (1, -1),
+            (GameMove.Paper, GameMove.Rock) => (1, -1),
+            (GameMove.Scissors, GameMove.Paper) => (1, -1),
+            _ => (-1, 1)
+        };
+
+    }
+    private void BroadcastLeaderboard()
+    {
+        lock (leaderboardLock)
+        {
+            foreach (var client in waitingPlayers) ;
+    
+        }
+    }
 }      
 
