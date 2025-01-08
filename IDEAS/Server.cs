@@ -5,13 +5,14 @@ using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class GameServer
+public class GameServer 
 {
     private TcpListener listener;
     private Dictionary<string, int> leaderboard = new Dictionary<string, int>();
     private Queue<TcpClient> waitingPlayers = new Queue<TcpClient>();
     private object leaderboardLock = new object();
     private int roundTime = 15; // Time limit for each round in seconds
+
     public GameServer(int port = 5000)
     {
         listener = new TcpListener(IPAddress.Any, port);
@@ -29,6 +30,7 @@ public class GameServer
             HandleNewConnection(client);
         }
     }
+
     private void HandleNewConnection(TcpClient client)
     {
         Task.Run(async () =>
@@ -38,9 +40,9 @@ public class GameServer
             using (var writer = new StreamWriter(stream) { AutoFlush = true })
             {
                 string playerName = await reader.ReadLineAsync();
-                Console.WriteLine($"Player {playerName} joined the game");
-                lock (leaderboardLock)
+                Console.WriteLine($"Player {playerName} has joined!");
 
+                lock (leaderboardLock)
                 {
                     if (!leaderboard.ContainsKey(playerName))
                         leaderboard[playerName] = 0;
@@ -64,7 +66,7 @@ public class GameServer
         });
     }
 
-     private async void StartMatch(TcpClient client1, TcpClient client2, string player1Name)
+    private async void StartMatch(TcpClient client1, TcpClient client2, string player1Name)
     {
         Console.WriteLine($"Starting a match between {player1Name} and a new opponent!");
 
@@ -115,6 +117,7 @@ public class GameServer
             Console.WriteLine($"{player1Name} and {player2Name} match ended!");
         }
     }
+
     private async Task<(GameMove, GameMove)?> CollectMoves(StreamReader reader1, StreamReader reader2, StreamWriter writer1, StreamWriter writer2, string player1Name, string player2Name)
     {
         var moveTasks = new[]
@@ -152,6 +155,7 @@ public class GameServer
 
         return null;
     }
+
     private (string player1Message, int player1Score, string player2Message, int player2Score) DetermineResults(GameMove move1, GameMove move2)
     {
         if (move1 == move2) return ("It's a draw!", 0, "It's a draw!", 0);
@@ -164,14 +168,23 @@ public class GameServer
             _ => (-1, 1)
         };
 
+        return (
+            result.Item1 > 0 ? "You win this round!" : "You lose this round!",
+            result.Item1 > 0 ? 1 : 0,
+            result.Item2 > 0 ? "You win this round!" : "You lose this round!",
+            result.Item2 > 0 ? 1 : 0
+        );
     }
+
     private void BroadcastLeaderboard()
     {
         lock (leaderboardLock)
         {
-            foreach (var client in waitingPlayers) ;
-    
+            foreach (var client in waitingPlayers)
+            {
+                // Simulate sending leaderboard update
+            }
         }
     }
-}      
+}
 
