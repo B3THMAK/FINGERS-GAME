@@ -1,35 +1,84 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-public class GameServer 
+public class GameServer : IDisposable
 {
-    private TcpListener listener;
-    private Dictionary<string, int> leaderboard = new Dictionary<string, int>();
-    private Queue<TcpClient> waitingPlayers = new Queue<TcpClient>();
-    private object leaderboardLock = new object();
-    private int roundTime = 15; // Time limit for each round in seconds
+    private readonly TcpListener listener;
+    private readonly ConcurrentDictionary<string, int> leaderboard = new();
+    private readonly ConcurrentQueue<(TcpClient client, string name)> waitingPlayers = new();
+    private readonly CancellationTokenSource shutdownToken = new();
+    private readonly SemaphoreSlim connectionLimiter;
+    private readonly int maxConnections = 100;
+    private readonly int roundTime = 15;
+    private bool isDisposed;
 
     public GameServer(int port = 5000)
     {
         listener = new TcpListener(IPAddress.Any, port);
+        connectionLimiter = new SemaphoreSlim(maxConnections);
     }
 
-    public async Task Start()
+    public async Task StartAsync(CancellationToken externalCancellation = default)
     {
-        listener.Start();
-        Console.WriteLine("Server started. Waiting for connections...");
-
-        while (true)
+        try
         {
-            TcpClient client = await listener.AcceptTcpClientAsync();
-            Console.WriteLine("New client connected!");
-            HandleNewConnection(client);
+            // Create a linked token that combines our internal shutdown token with the external one
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                shutdownToken.Token,
+                externalCancellation);
+
+            listener.Start();
+            Console.WriteLine("Server started. Waiting for connections...");
+
+            while (!linkedCts.Token.IsCancellationRequested)
+            {
+                if (!await connectionLimiter.WaitAsync(1000, linkedCts.Token))
+                    continue;
+
+                try
+                {
+                    var acceptTask = listener.AcceptTcpClientAsync();
+                    if (await Task.WhenAny(acceptTask, Task.Delay(30000)) == acceptTask)
+                    {
+                        var client = await acceptTask;
+                        _ = HandleNewConnectionAsync(client, linkedCts.Token)
+                            .ContinueWith(t =>
+                            {
+                                if (t.IsFaulted)
+                                    Console.WriteLine($"Connection handler failed: {t.Exception}");
+                            }, TaskContinuationOptions.OnlyOnFaulted);
+                    }
+                    else
+                    {
+                        // Timeout occurred
+                        connectionLimiter.Release();
+                        continue;
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Console.WriteLine($"Error accepting client: {ex.Message}");
+                    connectionLimiter.Release();
+                    continue;
+                }
+                catch (OperationCanceledException) when (linkedCts.Token.IsCancellationRequested)
+                {
+                    connectionLimiter.Release();
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            await ShutdownAsync();
         }
     }
+
 
     private void HandleNewConnection(TcpClient client)
     {
@@ -65,126 +114,32 @@ public class GameServer
             }
         });
     }
-
-    private async void StartMatch(TcpClient client1, TcpClient client2, string player1Name)
+    public async Task ShutdownAsync()
     {
-        Console.WriteLine($"Starting a match between {player1Name} and a new opponent!");
+        if (isDisposed)
+            return;
 
-        using (NetworkStream stream1 = client1.GetStream())
-        using (NetworkStream stream2 = client2.GetStream())
-        using (var reader1 = new StreamReader(stream1))
-        using (var writer1 = new StreamWriter(stream1) { AutoFlush = true })
-        using (var reader2 = new StreamReader(stream2))
-        using (var writer2 = new StreamWriter(stream2) { AutoFlush = true })
+        shutdownToken.Cancel();
+        listener.Stop();
+
+        while (waitingPlayers.TryDequeue(out var player))
         {
-            string player2Name = await reader2.ReadLineAsync();
-            Console.WriteLine($"Player {player2Name} joined {player1Name} in a match!");
-
-            while (true)
-            {
-                var moves = await CollectMoves(reader1, reader2, writer1, writer2, player1Name, player2Name);
-                if (moves == null) break; // One or both players disconnected
-
-                var (player1Move, player2Move) = moves.Value;
-                var results = DetermineResults(player1Move, player2Move);
-
-                // Update leaderboard
-                lock (leaderboardLock)
-                {
-                    leaderboard[player1Name] += results.player1Score;
-                    leaderboard[player2Name] += results.player2Score;
-                }
-
-                // Notify players
-                await writer1.WriteLineAsync(JsonSerializer.Serialize(new GameMessage
-                {
-                    Type = "RESULT",
-                    Content = $"You played {player1Move}, opponent played {player2Move}. {results.player1Message}",
-                    Score = leaderboard[player1Name]
-                }));
-
-                await writer2.WriteLineAsync(JsonSerializer.Serialize(new GameMessage
-                {
-                    Type = "RESULT",
-                    Content = $"You played {player2Move}, opponent played {player1Move}. {results.player2Message}",
-                    Score = leaderboard[player2Name]
-                }));
-
-                // Broadcast leaderboard
-                BroadcastLeaderboard();
-            }
-
-            Console.WriteLine($"{player1Name} and {player2Name} match ended!");
-        }
-    }
-
-    private async Task<(GameMove, GameMove)?> CollectMoves(StreamReader reader1, StreamReader reader2, StreamWriter writer1, StreamWriter writer2, string player1Name, string player2Name)
-    {
-        var moveTasks = new[]
-        {
-            CollectMove(reader1, writer1, player1Name),
-            CollectMove(reader2, writer2, player2Name)
-        };
-
-        if (await Task.WhenAll(moveTasks) is [GameMove ? move1, GameMove ? move2])
-        {
-            return (move1.Value, move2.Value);
+            player.client.Dispose();
         }
 
-        return null; // One or both players timed out/disconnected
+        connectionLimiter.Dispose();
+        shutdownToken.Dispose();
+        isDisposed = true;
     }
 
-    private async Task<GameMove?> CollectMove(StreamReader reader, StreamWriter writer, string playerName)
+    public void Dispose()
     {
-        try
-        {
-            await writer.WriteLineAsync($"Round starting! Make your move within {roundTime} seconds.");
-            var moveTask = reader.ReadLineAsync();
-            if (await Task.WhenAny(moveTask, Task.Delay(roundTime * 1000)) == moveTask)
-            {
-                string move = moveTask.Result;
-                return Enum.TryParse<GameMove>(move, true, out var parsedMove) ? parsedMove : (GameMove?)null;
-            }
-
-            await writer.WriteLineAsync("You took too long! You forfeit this round.");
-        }
-        catch
-        {
-            Console.WriteLine($"{playerName} disconnected.");
-        }
-
-        return null;
+        ShutdownAsync().GetAwaiter().GetResult();
     }
 
-    private (string player1Message, int player1Score, string player2Message, int player2Score) DetermineResults(GameMove move1, GameMove move2)
+    internal async Task Start()
     {
-        if (move1 == move2) return ("It's a draw!", 0, "It's a draw!", 0);
-
-        var result = (move1, move2) switch
-        {
-            (GameMove.Rock, GameMove.Scissors) => (1, -1),
-            (GameMove.Paper, GameMove.Rock) => (1, -1),
-            (GameMove.Scissors, GameMove.Paper) => (1, -1),
-            _ => (-1, 1)
-        };
-
-        return (
-            result.Item1 > 0 ? "You win this round!" : "You lose this round!",
-            result.Item1 > 0 ? 1 : 0,
-            result.Item2 > 0 ? "You win this round!" : "You lose this round!",
-            result.Item2 > 0 ? 1 : 0
-        );
+        throw new NotImplementedException();
     }
 
-    private void BroadcastLeaderboard()
-    {
-        lock (leaderboardLock)
-        {
-            foreach (var client in waitingPlayers)
-            {
-                // Simulate sending leaderboard update
-            }
-        }
-    }
 }
-
