@@ -115,6 +115,22 @@ public class GameServer : IDisposable
             client.Dispose();
         }
     }
+    private async Task MatchmakePlayerAsync(TcpClient client, string playerName,
+       StreamReader reader, StreamWriter writer)
+    {
+        if (waitingPlayers.TryDequeue(out var opponent))
+        {
+            if (opponent.client.Connected)
+            {
+                await StartMatchAsync(
+                    (client, reader, writer, playerName),
+                    opponent);
+                return;
+            }
+        }
+
+        waitingPlayers.Enqueue((client, playerName));
+    }
 
     public async Task ShutdownAsync()
     {
