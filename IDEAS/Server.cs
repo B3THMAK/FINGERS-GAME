@@ -80,40 +80,42 @@ public class GameServer : IDisposable
     }
 
 
-    private void HandleNewConnection(TcpClient client)
+    private async Task HandleNewConnectionaAsync(TcpClient client)
     {
-        Task.Run(async () =>
+
+        try
         {
-            using (NetworkStream stream = client.GetStream())
-            using (var reader = new StreamReader(stream))
-            using (var writer = new StreamWriter(stream) { AutoFlush = true })
+            using var stream = client.GetStream();
+            using var reader = new StreamReader(stream);
+            using var writer = new StreamWriter(stream) { AutoFlush = true };
+
+            client.ReceiveTimeout = 30000;
+            client.SendTimeout = 30000;
+
+            // Receive initial player name
+            var playerName = await reader.ReadLineAsync();
+            if (string.IsNullOrEmpty(playerName) || playerName.Length > 50)
+                return;
+
+            Console.WriteLine($"Player {playerName} has joined!");
+            leaderboard.TryAdd(playerName, 0);
+
+            // Send waiting message
+            await SendGameMessageAsync(writer, new GameMessage
             {
-                string playerName = await reader.ReadLineAsync();
-                Console.WriteLine($"Player {playerName} has joined!");
+                Type = "WAITING",
+                Content = "Waiting for an opponent..."
+            });
 
-                lock (leaderboardLock)
-                {
-                    if (!leaderboard.ContainsKey(playerName))
-                        leaderboard[playerName] = 0;
-                }
-
-                // Add player to matchmaking queue
-                lock (waitingPlayers)
-                {
-                    if (waitingPlayers.Count > 0)
-                    {
-                        var opponent = waitingPlayers.Dequeue();
-                        StartMatch(client, opponent, playerName);
-                    }
-                    else
-                    {
-                        waitingPlayers.Enqueue(client);
-                        await writer.WriteLineAsync("Waiting for an opponent...");
-                    }
-                }
-            }
-        });
+            await MatchmakePlayerAsync(client, playerName, reader, writer);
+        }
+        finally
+        {
+            connectionLimiter.Release();
+            client.Dispose();
+        }
     }
+
     public async Task ShutdownAsync()
     {
         if (isDisposed)
