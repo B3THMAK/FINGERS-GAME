@@ -131,7 +131,63 @@ public class GameServer : IDisposable
 
         waitingPlayers.Enqueue((client, playerName));
     }
+    private async Task StartMatchAsync(
+       (TcpClient client, StreamReader reader, StreamWriter writer, string name) player1,
+       (TcpClient client, string name) player2)
+    {
+        using var stream2 = player2.client.GetStream();
+        using var reader2 = new StreamReader(stream2);
+        using var writer2 = new StreamWriter(stream2) { AutoFlush = true };
 
+        try
+        {
+            while (!shutdownToken.Token.IsCancellationRequested)
+            {
+                // Request moves from both players
+                var moveRequest = new GameMessage
+                {
+                    Type = "MOVE_REQUEST",
+                    Content = $"Make your move within {roundTime} seconds."
+                };
+
+                await Task.WhenAll(
+                    SendGameMessageAsync(player1.writer, moveRequest),
+                    SendGameMessageAsync(writer2, moveRequest)
+                );
+
+                // Collect moves with timeout
+                var moves = await CollectMovesAsync(player1, (player2.client, reader2, writer2, player2.name));
+                if (!moves.HasValue)
+                    break;
+
+                var (move1, move2) = moves.Value;
+                var result = DetermineResult(move1, move2);
+
+                // Update scores and send results
+                await ProcessRoundResultAsync(
+                    player1.name, player1.writer, move1, move2, result,
+                    player2.name, writer2);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Match error: {ex.Message}");
+        }
+    }
+
+    private GameResults DetermineResult(GameMove move1, GameMove move2)
+    {
+        if (move1 == move2)
+            return GameResults.Draw;
+
+        return (move1, move2) switch
+        {
+            (GameMove.Rock, GameMove.Scissors) => GameResults.Win,
+            (GameMove.Paper, GameMove.Rock) => GameResults.Win,
+            (GameMove.Scissors, GameMove.Paper) => GameResults.Win,
+            _ => GameResults.Lose
+        };
+    }
     public async Task ShutdownAsync()
     {
         if (isDisposed)
