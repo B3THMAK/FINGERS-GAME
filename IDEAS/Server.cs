@@ -174,6 +174,35 @@ public class GameServer : IDisposable
             Console.WriteLine($"Match error: {ex.Message}");
         }
     }
+    private async Task<(GameMove move1, GameMove move2)?> CollectMovesAsync(
+        (TcpClient client, StreamReader reader, StreamWriter writer, string name) player1,
+        (TcpClient client, StreamReader reader, StreamWriter writer, string name) player2)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(roundTime));
+
+        try
+        {
+            var move1Task = GetMoveAsync(player1.reader);
+            var move2Task = GetMoveAsync(player2.reader);
+
+            await Task.WhenAll(move1Task, move2Task);
+            return (move1Task.Result, move2Task.Result);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+    }
+    private async Task<GameMove> GetMoveAsync(StreamReader reader)
+    {
+        var moveJson = await reader.ReadLineAsync();
+        var moveMessage = JsonSerializer.Deserialize<GameMessage>(moveJson);
+
+        if (moveMessage?.PlayerMove == null)
+            throw new InvalidOperationException("Invalid move received");
+
+        return moveMessage.PlayerMove.Value;
+    }
 
     private GameResults DetermineResult(GameMove move1, GameMove move2)
     {
