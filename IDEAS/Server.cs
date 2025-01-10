@@ -188,6 +188,46 @@ public class GameServer : IDisposable
             _ => GameResults.Lose
         };
     }
+    private async Task ProcessRoundResultAsync(
+        string player1Name, StreamWriter writer1, GameMove move1, GameMove move2,
+        GameResults result, string player2Name, StreamWriter writer2)
+    {
+        // Update leaderboard
+        if (result == GameResults.Win)
+            leaderboard.AddOrUpdate(player1Name, 1, (_, score) => score + 1);
+        else if (result == GameResults.Lose)
+            leaderboard.AddOrUpdate(player2Name, 1, (_, score) => score + 1);
+
+        // Send results to players
+        await SendGameMessageAsync(writer1, new GameMessage
+        {
+            Type = "RESULT",
+            Content = $"You played {move1}, opponent played {move2}. {result}!",
+            PlayerMove = move1,
+            Score = leaderboard[player1Name]
+        });
+
+        var player2Result = result switch
+        {
+            GameResults.Win => GameResults.Lose,
+            GameResults.Lose => GameResults.Win,
+            _ => GameResults.Draw
+        };
+
+        await SendGameMessageAsync(writer2, new GameMessage
+        {
+            Type = "RESULT",
+            Content = $"You played {move2}, opponent played {move1}. {player2Result}!",
+            PlayerMove = move2,
+            Score = leaderboard[player2Name]
+        });
+    }
+
+    private static async Task SendGameMessageAsync(StreamWriter writer, GameMessage message)
+    {
+        await writer.WriteLineAsync(JsonSerializer.Serialize(message));
+    }
+
     public async Task ShutdownAsync()
     {
         if (isDisposed)
