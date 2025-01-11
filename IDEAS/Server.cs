@@ -79,8 +79,8 @@ public class GameServer : IDisposable
         }
     }
 
+    private async Task HandleNewConnectionAsync(TcpClient client, CancellationToken token)
 
-    private async Task HandleNewConnectionaAsync(TcpClient client)
     {
 
         try
